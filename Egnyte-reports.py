@@ -85,34 +85,47 @@ def _is_streamlit_runtime() -> bool:
         return False
 
 
-def run_streamlit_app(config_path: str = "egnyte_secrets.txt") -> None:
-    import streamlit as st
+def _read_streamlit_secret_value(st, key: str) -> str:
+    value = st.secrets.get(key, "")
+    if value:
+        return str(value)
 
-    config = {}
-    try:
-        config = load_config(config_path)
-    except FileNotFoundError:
-        # Keep working with manual inputs in Streamlit.
-        config = {}
+    egnyte_section = st.secrets.get("egnyte", {})
+    if isinstance(egnyte_section, dict):
+        return str(egnyte_section.get(key, ""))
+
+    return ""
+
+
+def run_streamlit_app() -> None:
+    import streamlit as st
 
     st.set_page_config(page_title="Egnyte Folder Report", layout="centered")
     st.title("Egnyte Folder Report")
 
-    domain = st.text_input("Domain", value=config.get("DOMAIN", ""))
-    token = st.text_input("OAuth Token", value=config.get("TOKEN", ""), type="password")
+    domain = _read_streamlit_secret_value(st, "DOMAIN") or _read_streamlit_secret_value(st, "domain")
+    token = _read_streamlit_secret_value(st, "TOKEN") or _read_streamlit_secret_value(st, "token")
+
+    if not domain or not token:
+        st.error(
+            "Missing DOMAIN/TOKEN in Streamlit secrets. "
+            "Add either top-level keys or an [egnyte] section."
+        )
+        st.code(
+            'DOMAIN = "your-domain.egnyte.com"\n'
+            'TOKEN = "your-token"\n\n'
+            '[egnyte]\n'
+            'domain = "your-domain.egnyte.com"\n'
+            'token = "your-token"',
+            language="toml",
+        )
+        return
+
     folder_path = st.text_input("Folder Path", value="")
 
     if st.button("Generate Report", type="primary"):
-        missing = []
-        if not domain.strip():
-            missing.append("DOMAIN")
-        if not token.strip():
-            missing.append("TOKEN")
         if not folder_path.strip():
-            missing.append("FOLDER PATH")
-
-        if missing:
-            st.error("Missing required values: " + ", ".join(missing))
+            st.error("Missing required value: FOLDER PATH")
             return
 
         try:

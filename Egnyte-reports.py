@@ -1,8 +1,7 @@
 import argparse
 import requests
 from urllib.parse import quote
-import tkinter as tk
-from tkinter import messagebox
+from typing import Optional
 
 
 def load_config(file_path: str) -> dict:
@@ -70,7 +69,72 @@ def build_report_text(folder_path: str, stats: dict) -> str:
     )
 
 
+def generate_report(domain: str, token: str, raw_folder_path: str) -> str:
+    folder_path = normalize_folder_path(raw_folder_path)
+    folder_id = get_folder_id(domain, token, folder_path)
+    stats = get_folder_stats(domain, token, folder_id)
+    return build_report_text(folder_path, stats)
+
+
+def _is_streamlit_runtime() -> bool:
+    try:
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+
+        return get_script_run_ctx() is not None
+    except Exception:
+        return False
+
+
+def run_streamlit_app(config_path: str = "egnyte_secrets.txt") -> None:
+    import streamlit as st
+
+    config = {}
+    try:
+        config = load_config(config_path)
+    except FileNotFoundError:
+        # Keep working with manual inputs in Streamlit.
+        config = {}
+
+    st.set_page_config(page_title="Egnyte Folder Report", layout="centered")
+    st.title("Egnyte Folder Report")
+
+    domain = st.text_input("Domain", value=config.get("DOMAIN", ""))
+    token = st.text_input("OAuth Token", value=config.get("TOKEN", ""), type="password")
+    folder_path = st.text_input("Folder Path", value="")
+
+    if st.button("Generate Report", type="primary"):
+        missing = []
+        if not domain.strip():
+            missing.append("DOMAIN")
+        if not token.strip():
+            missing.append("TOKEN")
+        if not folder_path.strip():
+            missing.append("FOLDER PATH")
+
+        if missing:
+            st.error("Missing required values: " + ", ".join(missing))
+            return
+
+        try:
+            report = generate_report(domain.strip(), token.strip(), folder_path)
+            st.success("Report generated")
+            st.text_area("Report", value=report, height=220)
+            st.download_button(
+                "Download Report",
+                data=report,
+                file_name="egnyte_report.txt",
+                mime="text/plain",
+            )
+        except requests.HTTPError as e:
+            st.error(f"HTTP error: {e.response.status_code} {e.response.text}")
+        except Exception as e:
+            st.error(f"Error: {e}")
+
+
 def create_main_window(domain: str, token: str, default_path: str = "") -> None:
+    import tkinter as tk
+    from tkinter import messagebox
+
     default_path = normalize_folder_path(default_path) if default_path else ""
 
     root = tk.Tk()
@@ -112,9 +176,7 @@ def create_main_window(domain: str, token: str, default_path: str = "") -> None:
         root.update_idletasks()
 
         try:
-            folder_id = get_folder_id(domain, token, folder_path)
-            stats = get_folder_stats(domain, token, folder_id)
-            set_result(build_report_text(folder_path, stats))
+            set_result(generate_report(domain, token, folder_path))
             status_var.set("Report generated")
         except requests.HTTPError as e:
             status_var.set("Error")
@@ -154,13 +216,17 @@ def create_main_window(domain: str, token: str, default_path: str = "") -> None:
     folder_entry.focus_set()
     root.mainloop()
 
-def main():
+def main(argv: Optional[list[str]] = None):
+    if _is_streamlit_runtime():
+        run_streamlit_app()
+        return
+
     parser = argparse.ArgumentParser(description="Fetch Egnyte folder statistics and print to terminal.")
     parser.add_argument("--config", default="egnyte_secrets.txt", help="Path to config txt file")
     parser.add_argument("--domain", help="Egnyte domain, e.g. company.egnyte.com")
     parser.add_argument("--token", help="OAuth bearer token")
     parser.add_argument("--path", help="Folder path, e.g. /Shared/Shared/SPP/KPMG/Projects")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     try:
         config = load_config(args.config)
